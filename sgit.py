@@ -5,21 +5,49 @@ import time
 import subprocess
 import re
 
-VERSION_FILE = '.version'
+def run_command(command, capture_output=False, exit_on_error=True):
+    """Run a shell command and return the result."""
+    try:
+        result = subprocess.run(command, shell=True, text=True, 
+                               capture_output=capture_output, check=True)
+        if capture_output:
+            return result.stdout.strip()
+        return True
+    except subprocess.CalledProcessError as e:
+        if exit_on_error:
+            print(f"Error executing command: {command}")
+            print(f"Error message: {e.stderr.strip() if e.stderr else 'Unknown error'}")
+            sys.exit(1)
+        else:
+            # Re-raise the exception so the caller can handle it
+            raise
+
+def get_version_file_path():
+    """Get the path to the version file for the current git repository."""
+    try:
+        # Get the git root directory
+        git_root = run_command("git rev-parse --show-toplevel", capture_output=True)
+        return os.path.join(git_root, '.version')
+    except:
+        # If not in a git repository, use the current directory
+        print("Warning: Not in a git repository. Using current directory for version file.")
+        return os.path.join(os.getcwd(), '.version')
 
 def get_current_version():
     """Read the current version from the version file."""
-    if not os.path.exists(VERSION_FILE):
+    version_file = get_version_file_path()
+    
+    if not os.path.exists(version_file):
         # Initialize with 0.0.0 if file doesn't exist
         set_version('00.00.00')
         return '00.00.00'
     
-    with open(VERSION_FILE, 'r') as f:
+    with open(version_file, 'r') as f:
         version = f.read().strip()
     
     # Validate version format
     if not re.match(r'^\d{2}\.\d{2}\.\d{2}$', version):
-        print(f"Error: Invalid version format in {VERSION_FILE}. Using default 00.00.00.")
+        print(f"Error: Invalid version format in {version_file}. Using default 00.00.00.")
         set_version('00.00.00')
         return '00.00.00'
     
@@ -32,10 +60,15 @@ def set_version(version):
         print("Error: Version must be in format xx.xx.xx.")
         sys.exit(1)
     
-    with open(VERSION_FILE, 'w') as f:
+    version_file = get_version_file_path()
+    
+    # Create directory if it doesn't exist (shouldn't be necessary for git repos)
+    os.makedirs(os.path.dirname(version_file), exist_ok=True)
+    
+    with open(version_file, 'w') as f:
         f.write(version)
     
-    print(f"Version set to {version}")
+    print(f"Version set to {version} (in {version_file})")
 
 def increment_version(major=False, minor=False, patch=False):
     """Increment version based on flags."""
@@ -78,54 +111,74 @@ def increment_version(major=False, minor=False, patch=False):
     else:
         return new_version
 
-def run_command(command, capture_output=False):
-    """Run a shell command and return the result."""
-    try:
-        result = subprocess.run(command, shell=True, text=True, 
-                               capture_output=capture_output, check=True)
-        if capture_output:
-            return result.stdout.strip()
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"Error executing command: {command}")
-        print(f"Error message: {e.stderr.strip() if e.stderr else 'Unknown error'}")
-        sys.exit(1)
-
 def get_status():
     """Get git status and parse changed files."""
-    status_output = run_command("git status --porcelain", capture_output=True)
-    if not status_output:
-        print("No changes to commit.")
-        sys.exit(0)
-    
-    files = []
-    for line in status_output.split('\n'):
-        if not line.strip():
-            continue
+    # Use a more direct approach with git status
+    try:
+        # Run git status with porcelain format for machine parsing
+        status_output = run_command("git status --porcelain", capture_output=True)
         
-        status_code = line[:2].strip()
-        file_path = line[3:].strip()
+        if not status_output:
+            print("No changes to commit.")
+            sys.exit(0)
         
-        status_desc = {
-            'M': 'Modified',
-            'A': 'Added',
-            'D': 'Deleted',
-            'R': 'Renamed',
-            'C': 'Copied',
-            'U': 'Updated but unmerged',
-            '??': 'Untracked'
-        }
+        files = []
+        for line in status_output.split('\n'):
+            if not line.strip():
+                continue
+            
+            status_code = line[:2].strip()
+            file_path = line[3:].strip()
+            
+            # Use git ls-files to verify the file actually exists
+            # Skip this check for deleted files (status D)
+            if status_code[0] != 'D' and status_code != '??':
+                try:
+                    # Check if the file exists in git's index
+                    run_command(f"git ls-files --error-unmatch '{file_path}'", capture_output=True)
+                except:
+                    print(f"Warning: File '{file_path}' not properly tracked by Git. Skipping.")
+                    continue
+            
+            status_desc = {
+                'M': 'Modified',
+                'A': 'Added',
+                'D': 'Deleted',
+                'R': 'Renamed',
+                'C': 'Copied',
+                'U': 'Updated but unmerged',
+                '??': 'Untracked'
+            }
+            
+            # Get the description based on the first character of the status code
+            description = status_desc.get(status_code[0], 'Changed')
+            
+            files.append({
+                'path': file_path,
+                'status': status_code,
+                'description': description
+            })
         
-        # Get the description based on the first character of the status code
-        description = status_desc.get(status_code[0], 'Changed')
+        # Double check that all files exist before proceeding
+        verified_files = []
+        for file in files:
+            if file['status'][0] == 'D':  # Skip existence check for deleted files
+                verified_files.append(file)
+                continue
+                
+            if file['status'] == '??':  # For untracked files, check using regular file system
+                if os.path.exists(file['path']):
+                    verified_files.append(file)
+                else:
+                    print(f"Warning: Untracked file '{file['path']}' not found. Skipping.")
+            else:
+                # For tracked files, we already verified them above
+                verified_files.append(file)
         
-        files.append({
-            'path': file_path,
-            'status': status_code,
-            'description': description
-        })
-    
-    return files
+        return verified_files
+    except Exception as e:
+        print(f"Error getting git status: {str(e)}")
+        sys.exit(1)
 
 def display_files(files):
     """Display the list of files with status and index."""
@@ -193,7 +246,13 @@ def main():
     
     # Add the selected files
     for file in files:
-        run_command(f"git add '{file['path']}'")
+        try:
+            if os.path.exists(file['path']) or file['status'][0] == 'D':
+                run_command(f"git add '{file['path']}'")
+            else:
+                print(f"Warning: File '{file['path']}' doesn't exist. Skipping.")
+        except Exception as e:
+            print(f"Warning: Could not add file '{file['path']}'. Skipping. Error: {str(e)}")
     
     # Prompt for commit message
     commit_message = input("\nEnter commit message (or press Enter for timestamp): ").strip()
