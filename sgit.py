@@ -155,25 +155,25 @@ def get_changed_files():
     files = []
     for line in status_output.split('\n'):
         if line.strip():
-            # The first two characters represent the status
-            status = line[:2].strip()
+            # The first two characters are the status codes, but we must not strip them
+            # as that would remove leading spaces that are part of the format
+            status_code = line[:2]
             
-            # Everything after the first 3 characters is the filename
-            # This ensures we don't accidentally truncate filenames
-            filename = line[3:].strip()
+            # The filename starts at position 3
+            filename = line[3:]
             
-            # Determine file status display text
-            if status == '??':
+            # Determine file status display text based on the status code
+            if status_code == '??':
                 status_text = "\033[92mNew\033[0m"
-            elif status.startswith('D'):
+            elif 'D' in status_code:
                 status_text = "\033[91mDeleted\033[0m"
             else:
                 status_text = "\033[93mModified\033[0m"
             
-            # Debug print to verify filenames
-            # print(f"DEBUG: Status '{status}', Filename '{filename}'")
+            # Debug output
+            # print(f"DEBUG - Status: '{status_code}', Filename: '{filename}'")
             
-            files.append((filename, status_text, status))
+            files.append((filename, status_text, status_code))
     
     return files
 
