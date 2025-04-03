@@ -1,276 +1,289 @@
 #!/usr/bin/env python3
+"""
+sgit - Semantic Versioning Git Pusher
+
+A custom Git wrapper that manages semantic versioning (2.0) with your Git repositories.
+Automatically tracks version numbers and provides a streamlined Git workflow.
+
+Usage:
+    sgit          - Regular commit with no version increment
+    sgit -M       - Increment major version (resets minor and patch to 00)
+    sgit -m       - Increment minor version (resets patch to 00)
+    sgit -p       - Increment patch version
+    sgit -s X.Y.Z - Set version to specific value (e.g., sgit -s 01.02.03)
+
+Features:
+    - Semantic versioning integration with Git commits
+    - File selection/deselection before committing
+    - Automatic version tracking
+    - Default timestamped commit messages
+"""
+
 import os
 import sys
-import time
 import subprocess
+import time
 import re
+import argparse
+from datetime import datetime
 
-def run_command(command, capture_output=False, exit_on_error=True):
-    """Run a shell command and return the result."""
+VERSION_FILE = "sgit.version"
+DEFAULT_VERSION = "00.00.01"  # Start with 00.00.01 if no version file exists
+
+def run_command(command, capture_output=True):
+    """Run a shell command and return its output."""
     try:
-        result = subprocess.run(command, shell=True, text=True, 
-                               capture_output=capture_output, check=True)
-        if capture_output:
-            return result.stdout.strip()
-        return True
+        result = subprocess.run(command, shell=True, check=True, 
+                               text=True, capture_output=capture_output)
+        return result.stdout.strip() if capture_output else None
     except subprocess.CalledProcessError as e:
-        if exit_on_error:
-            print(f"Error executing command: {command}")
-            print(f"Error message: {e.stderr.strip() if e.stderr else 'Unknown error'}")
-            sys.exit(1)
-        else:
-            # Re-raise the exception so the caller can handle it
-            raise
+        print(f"\033[91mError executing: {command}\033[0m")
+        print(f"\033[91m{e.stderr}\033[0m")
+        sys.exit(1)
 
-def get_version_file_path():
-    """Get the path to the version file for the current git repository."""
+def get_git_root():
+    """Get the root directory of the Git repository."""
     try:
-        # Get the git root directory
-        git_root = run_command("git rev-parse --show-toplevel", capture_output=True)
-        return os.path.join(git_root, '.version')
+        return run_command("git rev-parse --show-toplevel")
     except:
-        # If not in a git repository, use the current directory
-        print("Warning: Not in a git repository. Using current directory for version file.")
-        return os.path.join(os.getcwd(), '.version')
+        print("\033[91mError: Not in a Git repository.\033[0m")
+        sys.exit(1)
 
 def get_current_version():
-    """Read the current version from the version file."""
-    version_file = get_version_file_path()
+    """Get the current version from the sgit.version file."""
+    git_root = get_git_root()
+    version_path = os.path.join(git_root, VERSION_FILE)
     
-    if not os.path.exists(version_file):
-        # Initialize with 0.0.0 if file doesn't exist
-        set_version('00.00.00')
-        return '00.00.00'
+    if os.path.exists(version_path):
+        with open(version_path, 'r') as f:
+            version = f.read().strip()
+            # Validate the version format
+            if re.match(r'^\d{2}\.\d{2}\.\d{2}$', version):
+                return version
+            else:
+                print(f"\033[93mWarning: Invalid version format in {VERSION_FILE}, resetting to {DEFAULT_VERSION}\033[0m")
+    else:
+        print(f"\033[93mCreating new {VERSION_FILE} with initial version {DEFAULT_VERSION}\033[0m")
     
-    with open(version_file, 'r') as f:
-        version = f.read().strip()
+    # If file doesn't exist or has invalid format, create with default version
+    with open(version_path, 'w') as f:
+        f.write(DEFAULT_VERSION)
     
-    # Validate version format
-    if not re.match(r'^\d{2}\.\d{2}\.\d{2}$', version):
-        print(f"Error: Invalid version format in {version_file}. Using default 00.00.00.")
-        set_version('00.00.00')
-        return '00.00.00'
-    
-    return version
+    return DEFAULT_VERSION
 
 def set_version(version):
-    """Write the version to the version file."""
+    """Set the version in the sgit.version file."""
     # Validate version format
     if not re.match(r'^\d{2}\.\d{2}\.\d{2}$', version):
-        print("Error: Version must be in format xx.xx.xx.")
+        print("\033[91mError: Version must be in format XX.XX.XX (e.g., 01.02.03)\033[0m")
         sys.exit(1)
     
-    version_file = get_version_file_path()
+    git_root = get_git_root()
+    version_path = os.path.join(git_root, VERSION_FILE)
     
-    # Create directory if it doesn't exist (shouldn't be necessary for git repos)
-    os.makedirs(os.path.dirname(version_file), exist_ok=True)
-    
-    with open(version_file, 'w') as f:
+    with open(version_path, 'w') as f:
         f.write(version)
     
-    print(f"Version set to {version} (in {version_file})")
+    print(f"\033[92mVersion set to {version}\033[0m")
+    return version
 
-def increment_version(major=False, minor=False, patch=False):
-    """Increment version based on flags."""
-    current = get_current_version()
-    major_num, minor_num, patch_num = map(int, current.split('.'))
+def increment_version(current_version, major=False, minor=False, patch=False):
+    """Increment the version based on which component should be increased."""
+    parts = current_version.split('.')
+    major_val = int(parts[0])
+    minor_val = int(parts[1])
+    patch_val = int(parts[2])
+    
+    # Store which components were incremented for adding stars later
+    incremented = []
     
     if major:
-        major_num += 1
-        minor_num = 0
-        patch_num = 0
-    elif minor:
-        minor_num += 1
-        patch_num = 0
-    elif patch:
-        patch_num += 1
+        major_val = (major_val + 1) % 100
+        minor_val = 0
+        patch_val = 0
+        incremented.append('major')
     
-    # Check for overflow
-    if major_num > 99:
-        print("Warning: Major version exceeded 99, resetting to 99.")
-        major_num = 99
-    if minor_num > 99:
-        print("Warning: Minor version exceeded 99, resetting to 99.")
-        minor_num = 99
-    if patch_num > 99:
-        print("Warning: Patch version exceeded 99, resetting to 99.")
-        patch_num = 99
+    if minor:
+        minor_val = (minor_val + 1) % 100
+        patch_val = 0
+        incremented.append('minor')
     
-    new_version = f"{major_num:02d}.{minor_num:02d}.{patch_num:02d}"
-    set_version(new_version)
+    if patch:
+        patch_val = (patch_val + 1) % 100
+        incremented.append('patch')
     
-    # Create indicator string
-    if major:
-        return f"*{new_version}"
-    elif minor:
-        parts = new_version.split('.')
-        return f"{parts[0]}.*{parts[1]}.{parts[2]}"
-    elif patch:
-        parts = new_version.split('.')
-        return f"{parts[0]}.{parts[1]}.*{parts[2]}"
+    # Format with leading zeros
+    new_version = f"{major_val:02d}.{minor_val:02d}.{patch_val:02d}"
+    
+    return new_version, incremented
+
+def format_version_with_stars(version, incremented):
+    """Format the version with stars next to incremented components."""
+    if not incremented:
+        return version  # No stars if nothing was incremented
+    
+    parts = version.split('.')
+    
+    # Create the version string with stars
+    version_with_stars = ""
+    if 'major' in incremented:
+        version_with_stars += f"*{parts[0]}."
     else:
-        return new_version
+        version_with_stars += f"{parts[0]}."
+        
+    if 'minor' in incremented:
+        version_with_stars += f"*{parts[1]}."
+    else:
+        version_with_stars += f"{parts[1]}."
+        
+    if 'patch' in incremented:
+        version_with_stars += f"*{parts[2]}"
+    else:
+        version_with_stars += f"{parts[2]}"
+    
+    return version_with_stars
 
-def get_status():
-    """Get git status and parse changed files."""
-    # Use a more direct approach with git status
-    try:
-        # Run git status with porcelain format for machine parsing
-        status_output = run_command("git status --porcelain", capture_output=True)
-        
-        if not status_output:
-            print("No changes to commit.")
-            sys.exit(0)
-        
-        files = []
-        for line in status_output.split('\n'):
-            if not line.strip():
-                continue
+def get_changed_files():
+    """Get a list of files changed in the working directory."""
+    # Get all changes (including untracked files)
+    status_output = run_command("git status --porcelain")
+    
+    if not status_output:
+        print("\033[93mNo changes to commit.\033[0m")
+        sys.exit(0)
+    
+    files = []
+    for line in status_output.split('\n'):
+        if line.strip():
+            # The first two characters represent the status
+            status = line[:2].strip()
             
-            status_code = line[:2].strip()
-            file_path = line[3:].strip()
+            # Everything after the first 3 characters is the filename
+            # This ensures we don't accidentally truncate filenames
+            filename = line[3:].strip()
             
-            # Use git ls-files to verify the file actually exists
-            # Skip this check for deleted files (status D)
-            if status_code[0] != 'D' and status_code != '??':
-                try:
-                    # Check if the file exists in git's index
-                    run_command(f"git ls-files --error-unmatch '{file_path}'", capture_output=True)
-                except:
-                    print(f"Warning: File '{file_path}' not properly tracked by Git. Skipping.")
-                    continue
-            
-            status_desc = {
-                'M': 'Modified',
-                'A': 'Added',
-                'D': 'Deleted',
-                'R': 'Renamed',
-                'C': 'Copied',
-                'U': 'Updated but unmerged',
-                '??': 'Untracked'
-            }
-            
-            # Get the description based on the first character of the status code
-            description = status_desc.get(status_code[0], 'Changed')
-            
-            files.append({
-                'path': file_path,
-                'status': status_code,
-                'description': description
-            })
-        
-        # Double check that all files exist before proceeding
-        verified_files = []
-        for file in files:
-            if file['status'][0] == 'D':  # Skip existence check for deleted files
-                verified_files.append(file)
-                continue
-                
-            if file['status'] == '??':  # For untracked files, check using regular file system
-                if os.path.exists(file['path']):
-                    verified_files.append(file)
-                else:
-                    print(f"Warning: Untracked file '{file['path']}' not found. Skipping.")
+            # Determine file status display text
+            if status == '??':
+                status_text = "\033[92mNew\033[0m"
+            elif status.startswith('D'):
+                status_text = "\033[91mDeleted\033[0m"
             else:
-                # For tracked files, we already verified them above
-                verified_files.append(file)
-        
-        return verified_files
-    except Exception as e:
-        print(f"Error getting git status: {str(e)}")
-        sys.exit(1)
-
-def display_files(files):
-    """Display the list of files with status and index."""
-    print("\nFiles to be committed:")
-    print("-" * 60)
-    for i, file in enumerate(files, 1):
-        print(f"{i:2}. [{file['description']:8}] {file['path']}")
-    print("-" * 60)
-
-def prompt_remove_files(files):
-    """Prompt user to remove files from the commit."""
-    display_files(files)
+                status_text = "\033[93mModified\033[0m"
+            
+            # Debug print to verify filenames
+            # print(f"DEBUG: Status '{status}', Filename '{filename}'")
+            
+            files.append((filename, status_text, status))
     
-    remove_input = input("\nEnter indices to remove (comma-separated) or press Enter to continue: ").strip()
-    
-    if not remove_input:
-        return files
-    
-    try:
-        indices_to_remove = [int(idx.strip()) for idx in remove_input.split(',')]
-        filtered_files = [file for i, file in enumerate(files, 1) if i not in indices_to_remove]
-        
-        print(f"\nRemoved {len(files) - len(filtered_files)} files from commit.")
-        return filtered_files
-    except ValueError:
-        print("Invalid input. Proceeding with all files.")
-        return files
+    return files
 
 def main():
-    # Check for set version command
-    if len(sys.argv) > 1 and sys.argv[1] == '-s' and len(sys.argv) == 3:
-        set_version(sys.argv[2])
+    parser = argparse.ArgumentParser(description="Semantic Versioning Git Helper")
+    parser.add_argument('-M', action='store_true', help='Increment major version')
+    parser.add_argument('-m', action='store_true', help='Increment minor version')
+    parser.add_argument('-p', action='store_true', help='Increment patch version')
+    parser.add_argument('-s', metavar='VERSION', help='Set specific version (XX.XX.XX)')
+    
+    args = parser.parse_args()
+    
+    # Handle setting specific version with sgit -s
+    if args.s:
+        set_version(args.s)
         return
     
-    # Parse flags for version increments
-    major, minor, patch = False, False, False
+    # Get current version
+    current_version = get_current_version()
     
-    for arg in sys.argv[1:]:
-        if arg == '-M':
-            major = True
-        elif arg == '-m':
-            minor = True
-        elif arg == '-p':
-            patch = True
+    # Handle version increments
+    incremented = []
+    if args.M or args.m or args.p:
+        new_version, incremented = increment_version(current_version, args.M, args.m, args.p)
+        set_version(new_version)
+        current_version = new_version
     
-    # Get the version with indicator
-    version_indicator = increment_version(major, minor, patch)
+    # Get changed files
+    changed_files = get_changed_files()
     
-    # Get the files to be committed
-    files = get_status()
+    # Show files to be committed
+    print("\n\033[1mFiles to be committed:\033[0m")
+    for i, (filename, status_text, _) in enumerate(changed_files, 1):
+        print(f"{i}. {status_text} {filename}")
     
-    if not files:
-        print("No changes to commit.")
-        return
+    # Ask if user wants to remove any files
+    print("\nEnter indices of files to exclude (comma-separated) or press Enter to include all:")
+    exclude_input = input("> ").strip()
     
-    # Prompt to remove files
-    files = prompt_remove_files(files)
+    # Create a list for files to add
+    files_to_add = []
     
-    if not files:
-        print("No files selected for commit.")
-        return
-    
-    # Clear any previous staging
-    run_command("git reset")
-    
-    # Add the selected files
-    for file in files:
+    if exclude_input:
+        # Parse the indices to exclude
         try:
-            if os.path.exists(file['path']) or file['status'][0] == 'D':
-                run_command(f"git add '{file['path']}'")
-            else:
-                print(f"Warning: File '{file['path']}' doesn't exist. Skipping.")
-        except Exception as e:
-            print(f"Warning: Could not add file '{file['path']}'. Skipping. Error: {str(e)}")
+            exclude_indices = [int(idx.strip()) for idx in exclude_input.split(',') if idx.strip().isdigit()]
+            # Only include files not in the exclude list
+            files_to_add = [file[0] for i, file in enumerate(changed_files, 1) if i not in exclude_indices]
+        except ValueError:
+            print("\033[93mInvalid input. Including all files.\033[0m")
+            files_to_add = [file[0] for file in changed_files]
+        
+        if not files_to_add:
+            print("\033[93mNo files selected for commit. Exiting.\033[0m")
+            sys.exit(0)
+    else:
+        # Include all files if no exclusion
+        files_to_add = [file[0] for file in changed_files]
     
-    # Prompt for commit message
-    commit_message = input("\nEnter commit message (or press Enter for timestamp): ").strip()
+    # Display the list of files that will be added
+    print("\n\033[1mFiles that will be added to commit:\033[0m")
+    for i, filename in enumerate(files_to_add, 1):
+        print(f"{i}. {filename}")
+    
+    # Add files to staging
+    if files_to_add:
+        # First reset any staged files
+        run_command("git reset", capture_output=False)
+        
+        # Use different approaches to handle file adding
+        try:
+            # Method 1: Use git add . and then remove files we don't want
+            run_command("git add .", capture_output=False)
+            
+            # If we're not adding all files, we need to remove some
+            all_files = [file[0] for file in changed_files]
+            files_to_remove = [file for file in all_files if file not in files_to_add]
+            
+            # Remove any files that should be excluded
+            for file in files_to_remove:
+                print(f"\033[94mExcluding: {file}\033[0m")
+                run_command(f"git reset HEAD \"{file}\"", capture_output=False)
+                
+            print(f"\n\033[92mAdded {len(files_to_add)} file(s) to commit\033[0m")
+        except Exception as e:
+            print(f"\033[91mError adding files: {str(e)}\033[0m")
+            sys.exit(1)
+    
+    # Get commit message
+    print("\nEnter commit message (press Enter for timestamp):")
+    commit_message = input("> ").strip()
     
     if not commit_message:
-        commit_message = f"Automatic commit at {int(time.time())}"
+        # Use Unix timestamp as default message
+        commit_message = f"Automatic commit at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     
-    # Format the commit message with version
-    formatted_message = f"[{version_indicator}] {commit_message}"
+    # Format version with stars for the commit
+    version_display = format_version_with_stars(current_version, incremented)
+    
+    # Create full commit message with version
+    full_commit_message = f"[{version_display}] {commit_message}"
     
     # Commit and push
-    print(f"\nCommitting with message: {formatted_message}")
-    run_command(f"git commit -m '{formatted_message}'")
+    print(f"\n\033[94mCommitting with message: \"{full_commit_message}\"\033[0m")
+    run_command(f"git commit -m \"{full_commit_message}\"", capture_output=False)
     
-    print("\nPushing to remote...")
-    run_command("git push")
+    print("\n\033[94mPushing to remote repository...\033[0m")
+    push_result = run_command("git push", capture_output=True)
     
-    print("\nCompleted successfully.")
+    print(f"\n\033[92mSuccessfully pushed with version {current_version}\033[0m")
 
 if __name__ == "__main__":
     main()
