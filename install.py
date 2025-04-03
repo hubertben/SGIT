@@ -751,23 +751,25 @@ def get_changed_files():
         sys.exit(0)
     
     files = []
-    for line in status_output.split('\\n'):
+    for line in status_output.split('\n'):
         if line.strip():
             # The first two characters are the status codes, but we must not strip them
             # as that would remove leading spaces that are part of the format
-            status_code = line[:2]
-            
-            # The filename starts at position 3
-            filename = line[3:]
-            
-            # Determine file status display text based on the status code
+            status_code = line[:2].strip()
+            filename = line[2:].strip()
+
             if status_code == '??':
-                status_text = "\\033[92mNew\\033[0m"
-            elif 'D' in status_code:
-                status_text = "\\033[91mDeleted\\033[0m"
-            else:
-                status_text = "\\033[93mModified\\033[0m"
+                status_text = "\033[92mINSERT\033[0m"
             
+            elif status_code == 'D':
+                status_text = "\033[91mDELETE\033[0m"
+            
+            elif status_code == 'M':
+                status_text = "\033[93mUPDATE\033[0m"
+                
+            else:
+                status_text = "Unknown"
+
             files.append((filename, status_text, status_code))
     
     return files
